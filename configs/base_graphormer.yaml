@@ -1,0 +1,23 @@
+# OG 12L/32H/768d Graphormer — matches pretrained architecture dimensions.
+# For training from scratch on graph regression with full structural pathway.
+model:
+  encoder_layers: 12
+  encoder_embed_dim: 768
+  encoder_ffn_embed_dim: 768
+  encoder_attention_heads: 32
+  pre_layernorm: true
+  use_virtual_distance: true
+  use_spd_bias: true
+
+train:
+  task: graph_regression
+  epochs: 50
+  lr: 1.0e-4
+  weight_decay: 0.01
+  samples: 50000
+  n_nodes: 48
+  batch_size: 32
+  num_feature_cols: 6
+  feature_vocab_size: 50
+  loss_type: mse
+  save_path: models/base_graphormer.pt
