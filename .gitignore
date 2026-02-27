@@ -13,9 +13,6 @@ logs/
 data/cache/
 datasets/
 
-# Jupyter
-.ipynb_checkpoints/
-
 # Editor
 .vscode/
 *.swp
