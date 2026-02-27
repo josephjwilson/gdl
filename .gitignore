@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+
+# Models and results (large artifacts)
+/models/
+results/
+logs/
+data/cache/
+datasets/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editor
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+fairseq/**/models/
