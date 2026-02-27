@@ -1,0 +1,24 @@
+model:
+  encoder_layers: 2
+  encoder_embed_dim: 256
+  encoder_ffn_embed_dim: 256
+  encoder_attention_heads: 8
+  pre_layernorm: true
+  use_virtual_distance: true
+  use_spd_bias: true
+
+train:
+  task: positional
+  epochs: 200
+  lr: 5.0e-4
+  weight_decay: 0.01
+  samples: 2000
+  n_nodes: 64
+  batch_size: 48
+  use_bf16: true
+  readout: cls
+  loss_type: mse
+  num_classes: 1
+  cache_dataset: datasets/positional/n64.pt
+  save_path: models/positional/2L/n64/baseline.pt
+  log_file: logs/positional/2L/n64/baseline.log
