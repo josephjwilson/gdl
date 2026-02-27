@@ -168,3 +168,138 @@ class PurePositionalDataset(Dataset):
             "out_degree": data.out_degree,
             "edge_input": data.edge_input,
         }
+
+class PureSemanticDataset(Dataset):
+    def __init__(
+        self,
+        num_samples: int = 2000,
+        num_nodes: int = 12,
+        n_nodes: int = None,
+        n_nodes_min: int = None,
+        n_nodes_max: int = None,
+        edge_prob: float = 0.3,
+        max_distance: int = 5,
+        feature_dim: int = None,
+        feature_vocab_size: int = 2,
+        seed: int = 42,
+        cache_path: str = None,
+        topology: str = "er",
+        target_position: str = "random",
+    ):
+        super().__init__()
+        if n_nodes is not None:
+            num_nodes = n_nodes
+        self.num_nodes = num_nodes
+        self.num_samples = num_samples
+        self.n_nodes_min = n_nodes_min
+        self.n_nodes_max = n_nodes_max
+        self.edge_prob = edge_prob
+        self.max_distance = max_distance
+        self.feature_vocab_size = feature_vocab_size
+        self.topology = topology
+        self.target_position = target_position
+
+        rng = np.random.default_rng(seed)
+
+        # Added some caching logic
+        if cache_path and os.path.exists(cache_path):
+            cached = torch.load(cache_path, map_location='cpu')
+            self.data_list = cached['data_list']
+            print(f"Loaded {len(self.data_list)} semantic graphs from {cache_path}")
+        else:
+            self.data_list = self._build_data_list(rng)
+            if cache_path:
+                os.makedirs(os.path.dirname(cache_path) or '.', exist_ok=True)
+                torch.save({'data_list': self.data_list, 'num_nodes': num_nodes, 'seed': seed}, cache_path)
+                print(f"Saved cache to {cache_path}")
+
+    def _build_data_list(self, rng):
+        data_list = []
+        variable_n = (self.n_nodes_min is not None and self.n_nodes_max is not None)
+
+        for _ in range(self.num_samples):
+            if variable_n:
+                n = int(rng.integers(self.n_nodes_min, self.n_nodes_max + 1))
+            else:
+                n = self.num_nodes
+
+            # Kept just added ER noise topology
+            if self.topology == "er":
+                edge_index = []
+                for i in range(n):
+                    for j in range(i + 1, n):
+                        if rng.random() < self.edge_prob:
+                            edge_index.append([i, j])
+                            edge_index.append([j, i])
+
+                # Ensure connectivity with a fallback path if no edges
+                if len(edge_index) == 0:
+                    for i in range(n - 1):
+                        edge_index.append([i, i + 1])
+                        edge_index.append([i + 1, i])
+            else:
+                raise ValueError(f"Unknown topology: {self.topology}")
+
+            edge_index = torch.tensor(edge_index, dtype=torch.long).t()
+
+            # Features: [value, is_target]
+            if self.target_position == "highest_degree":
+                degrees = torch.bincount(edge_index[0], minlength=n).numpy()
+                target = int(np.argmax(degrees))
+            elif self.target_position == "lowest_degree":
+                degrees = torch.bincount(edge_index[0], minlength=n).numpy()
+                target = int(np.argmin(degrees))
+            else:  # "random"
+                target = rng.integers(0, n)
+            c0 = torch.from_numpy(rng.integers(0, self.feature_vocab_size, size=(n, 1))).long()
+            c1 = torch.zeros(n, 1, dtype=torch.long)   # is_target column
+            c1[target] = 1
+            c1 = c1 + self.feature_vocab_size  # Offset to avoid embedding collision with c0 values
+            x = torch.cat([c0, c1], dim=1)                     # [N, 2]
+
+            # Label: value of the target node
+            label = c0[target].item()
+
+            data = Data(
+                x=x,
+                edge_index=edge_index,
+                y=torch.tensor([label], dtype=torch.long),
+                num_nodes=n,
+            )
+
+            data.edge_attr = torch.zeros((edge_index.size(1), 1), dtype=torch.long)
+
+            data = preprocess_item(data)
+
+            data_list.append(data)
+        return data_list
+
+    def regenerate(self, seed):
+        rng = np.random.default_rng(seed)
+        self.data_list = self._build_data_list(rng)
+    
+    def __len__(self):
+        return len(self.data_list)
+    
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            subset = PureSemanticDataset.__new__(PureSemanticDataset)
+            subset.data_list = self.data_list[idx]
+            subset.num_nodes = self.num_nodes
+            subset.max_distance = self.max_distance
+            return subset
+        
+        data = self.data_list[idx]
+        return {
+            "x": data.x, 
+            "edge_index": data.edge_index,
+            "edge_attr": data.edge_attr,
+            "y": data.y,
+            "num_nodes": data.num_nodes,
+            "attn_bias": data.attn_bias,
+            "attn_edge_type": data.attn_edge_type,
+            "spatial_pos": data.spatial_pos,
+            "in_degree": data.in_degree,
+            "out_degree": data.out_degree,
+            "edge_input": data.edge_input
+        }
