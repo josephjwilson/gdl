@@ -1,0 +1,25 @@
+# Please note, apply zero_qkt: true or zero_bias: false
+# This is the base config that scales for n8...n128
+model:
+  encoder_layers: 2
+  encoder_embed_dim: 256
+  encoder_ffn_embed_dim: 256
+  encoder_attention_heads: 8
+  pre_layernorm: true
+  use_virtual_distance: true
+  use_spd_bias: true
+  max_nodes: 256
+
+train:
+  task: semantic
+  epochs: 100
+  lr: 5.0e-4
+  weight_decay: 0.01
+  samples: 500
+  n_nodes: 128
+  batch_size: 24
+  use_bf16: true
+  readout: cls
+  cache_dataset: datasets/semantic/n128.pt
+  save_path: models/semantic/2L/n128/baseline.pt
+  log_file: logs/semantic/2L/n128/baseline.log
