@@ -1,9 +1,10 @@
-<img src="docs/logo-10.png" width=100%>
-
-Geometric Deep Learning: This repository is a fork of the original Graphormer repository with modifications for geometric deep learning tasks.
-We have included the following modifications:
-- Causal ablations
-- Permutation porbes
+Geometric Deep Learning: This repository is a fork of the original Graphormer repository extended for mechanistic analysis of attention head specialisation in graph transformers. Key additions:
+- **Causal ablations** — `bias_only` and `qkt_only` training conditions that isolate the structural (SPD bias) and semantic (QK attention) pathways
+- **Permutation probes** — positional/semantic head classification via feature and structure permutation tests (`experiments/probe_analysis.py`)
+- **ALiBi SPD bias** — replaces the learned SPD embedding table with a linear distance penalty that extrapolates to unseen graph sizes
+- **Eccentricity CLS bias** — structure-aware CLS aggregation for size generalisation
+- **OOD evaluation** — train/test size generalisation matrix (`experiments/ood_eval.py`)
+- **TUDataset size splits** — Yehudai et al. size-based splits for real-world graph benchmarks (`data/tu_dataset.py`)
 
 Graphormer is a deep learning package that allows researchers and developers to train custom models for molecule modeling tasks. It aims to accelerate the research and application in AI for molecule science, such as material discovery, drug discovery, etc. [Project website](https://www.microsoft.com/en-us/research/project/graphormer/).
 
