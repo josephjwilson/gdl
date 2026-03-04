@@ -28,12 +28,13 @@ class GraphNodeFeature(nn.Module):
 
     def __init__(
         self, num_heads, num_atoms, num_in_degree, num_out_degree, hidden_dim, n_layers,
-        no_cls=False,
+        no_cls=False, no_degree_embedding=False,
     ):
         super(GraphNodeFeature, self).__init__()
         self.num_heads = num_heads
         self.num_atoms = num_atoms
         self.no_cls = no_cls
+        self.no_degree_embedding = no_degree_embedding
 
         # 1 for graph token
         self.atom_encoder = nn.Embedding(num_atoms + 1, hidden_dim, padding_idx=0)
@@ -60,11 +61,12 @@ class GraphNodeFeature(nn.Module):
         # if self.flag and perturb is not None:
         #     node_feature += perturb
 
-        node_feature = (
-            node_feature
-            + self.in_degree_encoder(in_degree)
-            + self.out_degree_encoder(out_degree)
-        )
+        if not self.no_degree_embedding:
+            node_feature = (
+                node_feature
+                + self.in_degree_encoder(in_degree.clamp(max=self.in_degree_encoder.num_embeddings - 1))
+                + self.out_degree_encoder(out_degree.clamp(max=self.out_degree_encoder.num_embeddings - 1))
+            )
 
         if self.no_cls:
             return node_feature  # [B, N, C] — no graph token
@@ -93,9 +95,19 @@ class GraphAttnBias(nn.Module):
         multi_hop_max_dist,
         n_layers,
         fixed_spd_bias=False,
+        alibi_spd_bias=False,
+        alibi_custom_slopes=None,
         use_virtual_distance=True,
         use_spd_bias=True,
         no_cls=False,
+        use_ecc_cls_bias=False,
+        ecc_cls_slope=1.0,
+        use_farness_cls_bias=False,
+        use_ecc_alibi_cls_bias=False,
+        use_raw_ecc_alibi_cls_bias=False,
+        raw_ecc_alibi_slope_rate=8.0,
+        alibi_spd_slope_rate=8.0,
+        use_random_cls_bias=False,
     ):
         super(GraphAttnBias, self).__init__()
         self.num_heads = num_heads
@@ -104,6 +116,40 @@ class GraphAttnBias(nn.Module):
         self.use_virtual_distance = use_virtual_distance
         self.use_spd_bias = use_spd_bias
         self.no_cls = no_cls
+        self.use_ecc_cls_bias = use_ecc_cls_bias
+        self.ecc_cls_slope = ecc_cls_slope
+        self.use_farness_cls_bias = use_farness_cls_bias
+        if use_farness_cls_bias:
+            ratio = 2.0 ** (-8.0 / num_heads)
+            slopes = ratio ** torch.arange(1, num_heads + 1, dtype=torch.float32)
+            self.register_buffer('farness_cls_slopes', slopes.view(1, num_heads, 1))
+
+        self.use_ecc_alibi_cls_bias = use_ecc_alibi_cls_bias
+        if use_ecc_alibi_cls_bias:
+            ratio = 2.0 ** (-8.0 / num_heads)
+            slopes = ratio ** torch.arange(1, num_heads + 1, dtype=torch.float32)
+            self.register_buffer('ecc_alibi_cls_slopes', slopes.view(1, num_heads, 1))
+
+        self.use_raw_ecc_alibi_cls_bias = use_raw_ecc_alibi_cls_bias
+        if use_raw_ecc_alibi_cls_bias:
+            ratio = 2.0 ** (-raw_ecc_alibi_slope_rate / num_heads)
+            slopes = ratio ** torch.arange(1, num_heads + 1, dtype=torch.float32)
+            self.register_buffer('raw_ecc_alibi_cls_slopes', slopes.view(1, num_heads, 1))
+
+        self.use_random_cls_bias = use_random_cls_bias
+        if use_random_cls_bias:
+            ratio = 2.0 ** (-raw_ecc_alibi_slope_rate / num_heads)
+            slopes = ratio ** torch.arange(1, num_heads + 1, dtype=torch.float32)
+            self.register_buffer('random_cls_slopes', slopes.view(1, num_heads, 1))
+
+        if alibi_spd_bias:
+            if alibi_custom_slopes is not None:
+                slopes = torch.tensor(alibi_custom_slopes, dtype=torch.float32)
+            else:
+                ratio = 2.0 ** (-alibi_spd_slope_rate / num_heads)
+                slopes = ratio ** torch.arange(1, num_heads + 1, dtype=torch.float32)
+            self.register_buffer('alibi_slopes', slopes.view(1, num_heads, 1, 1))
+            self.alibi_spd_bias = alibi_spd_bias
 
         self.edge_encoder = nn.Embedding(num_edges + 1, num_heads, padding_idx=0)
         self.edge_type = edge_type
@@ -140,7 +186,10 @@ class GraphAttnBias(nn.Module):
             )  # [n_graph, n_head, n_node, n_node]
 
             # spatial pos — apply to full matrix (no [1:,1:] offset)
-            if self.fixed_spd_bias:
+            if getattr(self, 'alibi_spd_bias', False):
+                actual_dist = (spatial_pos.float() - 1.0).clamp(min=0)
+                spatial_pos_bias = -self.alibi_slopes * actual_dist.unsqueeze(1)
+            elif self.fixed_spd_bias:
                 actual_dist = spatial_pos.float() - 1.0
                 bias = torch.zeros_like(actual_dist)
                 bias[spatial_pos == 1] = 1.0
@@ -148,7 +197,7 @@ class GraphAttnBias(nn.Module):
                 bias[dist_mask] = 1.0 / actual_dist[dist_mask]
                 spatial_pos_bias = bias.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
             else:
-                spatial_pos_bias = self.spatial_pos_encoder(spatial_pos).permute(0, 3, 1, 2)
+                spatial_pos_bias = self.spatial_pos_encoder(spatial_pos.clamp(max=self.spatial_pos_encoder.num_embeddings - 1)).permute(0, 3, 1, 2)
             if self.use_spd_bias:
                 graph_attn_bias = graph_attn_bias + spatial_pos_bias
 
@@ -194,7 +243,11 @@ class GraphAttnBias(nn.Module):
 
         # spatial pos
         # [n_graph, n_node, n_node, n_head] -> [n_graph, n_head, n_node, n_node]
-        if self.fixed_spd_bias:
+        if getattr(self, 'alibi_spd_bias', False):
+            # ALiBi-style linear distance penalty: -m_h * d(i,j)
+            actual_dist = (spatial_pos.float() - 1.0).clamp(min=0)
+            spatial_pos_bias = -self.alibi_slopes * actual_dist.unsqueeze(1)
+        elif self.fixed_spd_bias:
             # Fixed 1/SPD bias (El et al. 2502.12352)
             # spatial_pos offset by collator: 0=padding, 1=distance_0(self), 2=distance_1, ...
             actual_dist = spatial_pos.float() - 1.0
@@ -205,7 +258,7 @@ class GraphAttnBias(nn.Module):
             # padding (spatial_pos==0) stays 0, masked by -inf anyway
             spatial_pos_bias = bias.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
         else:
-            spatial_pos_bias = self.spatial_pos_encoder(spatial_pos).permute(0, 3, 1, 2)
+            spatial_pos_bias = self.spatial_pos_encoder(spatial_pos.clamp(max=self.spatial_pos_encoder.num_embeddings - 1)).permute(0, 3, 1, 2)
         if self.use_spd_bias:
             graph_attn_bias[:, :, 1:, 1:] = graph_attn_bias[:, :, 1:, 1:] + spatial_pos_bias
 
@@ -214,6 +267,53 @@ class GraphAttnBias(nn.Module):
             t = self.graph_token_virtual_distance.weight.view(1, self.num_heads, 1)
             graph_attn_bias[:, :, 1:, 0] = graph_attn_bias[:, :, 1:, 0] + t
             graph_attn_bias[:, :, 0, :] = graph_attn_bias[:, :, 0, :] + t
+
+        # eccentricity-based CLS→node bias: penalise peripheral nodes
+        if self.use_ecc_cls_bias:
+            actual_dist = spatial_pos.float() - 1.0
+            actual_dist[spatial_pos == 0] = 0          # padding stays 0
+            ecc = actual_dist.max(dim=-1).values       # [B, N]
+            ecc_penalty = (-self.ecc_cls_slope * ecc).unsqueeze(1)  # [B, 1, N]
+            graph_attn_bias[:, :, 0, 1:] = graph_attn_bias[:, :, 0, 1:] + ecc_penalty
+
+        # farness-based ALiBi CLS→node bias: per-head geometric slopes on mean distance
+        if self.use_farness_cls_bias:
+            actual_dist = spatial_pos.float() - 1.0
+            actual_dist[spatial_pos == 0] = 0          # padding stays 0
+            n_real = (spatial_pos > 0).any(dim=-1).sum(dim=-1, keepdim=True).float().clamp(min=1)  # [B, 1]
+            mean_dist = actual_dist.sum(dim=-1) / n_real  # [B, N]
+            farness_penalty = -self.farness_cls_slopes * mean_dist.unsqueeze(1)  # [B, H, N]
+            graph_attn_bias[:, :, 0, 1:] = graph_attn_bias[:, :, 0, 1:] + farness_penalty
+
+        # diameter-normalized eccentricity ALiBi CLS→node bias: per-head slopes on ecc/diam
+        if self.use_ecc_alibi_cls_bias:
+            actual_dist = spatial_pos.float() - 1.0
+            actual_dist[spatial_pos == 0] = 0                                    # padding stays 0
+            ecc = actual_dist.max(dim=-1).values                                 # [B, N]
+            diam = ecc.max(dim=-1, keepdim=True).values.clamp(min=1)             # [B, 1]
+            norm_ecc = ecc / diam                                                # [B, N] in [~0.5, 1.0]
+            ecc_alibi_penalty = -self.ecc_alibi_cls_slopes * norm_ecc.unsqueeze(1)  # [B, H, N]
+            graph_attn_bias[:, :, 0, 1:] = graph_attn_bias[:, :, 0, 1:] + ecc_alibi_penalty
+
+        # unnormalized eccentricity ALiBi CLS→node bias: per-head slopes on raw ecc
+        if self.use_raw_ecc_alibi_cls_bias:
+            actual_dist = spatial_pos.float() - 1.0
+            actual_dist[spatial_pos == 0] = 0
+            ecc = actual_dist.max(dim=-1).values                                      # [B, N]
+            raw_ecc_penalty = -self.raw_ecc_alibi_cls_slopes * ecc.unsqueeze(1)        # [B, H, N]
+            graph_attn_bias[:, :, 0, 1:] = graph_attn_bias[:, :, 0, 1:] + raw_ecc_penalty
+
+        # random CLS→node bias control: uniform random scores in [0, diameter], same ALiBi slopes
+        if self.use_random_cls_bias:
+            actual_dist = spatial_pos.float() - 1.0
+            actual_dist[spatial_pos == 0] = 0
+            diam = actual_dist.max(dim=-1).values.max(dim=-1, keepdim=True).values.clamp(min=1)  # [B, 1]
+            n_nodes = actual_dist.size(1)
+            rand_scores = torch.rand(actual_dist.size(0), n_nodes, device=actual_dist.device) * diam  # [B, N]
+            # Zero out padding positions
+            rand_scores[spatial_pos.sum(dim=-1) == 0] = 0
+            random_penalty = -self.random_cls_slopes * rand_scores.unsqueeze(1)  # [B, H, N]
+            graph_attn_bias[:, :, 0, 1:] = graph_attn_bias[:, :, 0, 1:] + random_penalty
 
         # edge feature
         if self.edge_type == "multi_hop":

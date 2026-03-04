@@ -1,31 +1,43 @@
 import os
+import math
 import torch
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
 import numpy as np
-import networkx as nx
-from graphormer.data.wrapper import preprocess_item, preprocess_item_fast
-from ogb.graphproppred import PygGraphPropPredDataset
+from graphormer.data.wrapper import preprocess_item
+
 
 class PurePositionalDataset(Dataset):
-    NUM_CLASSES = 1
+    NUM_CLASSES = 1  # regression output
 
     def __init__(
         self,
         num_samples: int = 2000,
         num_nodes: int = 12,
-        n_nodes: int = None,
+        n_nodes: int = None,  # Alias for compatibility with analysis pipeline
         max_distance: int = 12,
-        feature_dim: int = None,
+        feature_dim: int = None,  # Ignored, for compatibility
         seed: int = 42,
         cache_path: str = None,
+        target_metric: str = "apl",  # "apl" or "global_efficiency"
     ):
         super().__init__()
         if n_nodes is not None:
             num_nodes = n_nodes
         self.data_list = []
         self.max_distance = max_distance
+        self.target_metric = target_metric
         rng = np.random.default_rng(seed)
+
+        # Select target computation function
+        if target_metric == "apl":
+            compute_target = self._compute_avg_path_length
+        elif target_metric == "global_efficiency":
+            compute_target = self._compute_global_efficiency
+        elif target_metric == "ge_sqrt_n":
+            compute_target = self._compute_ge_sqrt_n
+        else:
+            raise ValueError(f"Unknown target_metric: {target_metric!r}. Use 'apl', 'global_efficiency', or 'ge_sqrt_n'.")
 
         if cache_path and os.path.exists(cache_path):
             cached = torch.load(cache_path, map_location='cpu')
@@ -36,14 +48,14 @@ class PurePositionalDataset(Dataset):
                 edge_index_list = self._generate_random_tree(rng, num_nodes)
                 edge_index = torch.tensor(edge_index_list, dtype=torch.long).t()
 
-                avg_path_length = self._compute_avg_path_length(edge_index_list, num_nodes)
+                target_value = compute_target(edge_index_list, num_nodes)
 
                 x = torch.full((num_nodes, 1), 10, dtype=torch.long)
 
                 data = Data(
                     x=x,
                     edge_index=edge_index,
-                    y=torch.tensor([avg_path_length], dtype=torch.float),
+                    y=torch.tensor([target_value], dtype=torch.float),
                     num_nodes=num_nodes,
                 )
 
@@ -52,11 +64,13 @@ class PurePositionalDataset(Dataset):
                 self.data_list.append(data)
             if cache_path:
                 os.makedirs(os.path.dirname(cache_path) or '.', exist_ok=True)
-                torch.save({'data_list': self.data_list, 'num_nodes': num_nodes, 'seed': seed}, cache_path)
+                torch.save({'data_list': self.data_list, 'num_nodes': num_nodes,
+                            'seed': seed, 'target_metric': target_metric}, cache_path)
                 print(f"Saved cache to {cache_path}")
 
     @staticmethod
     def _generate_random_tree(rng, num_nodes):
+        """Random labeled tree via Prüfer sequence. Returns bidirectional edge list."""
         import heapq
 
         if num_nodes == 1:
@@ -142,6 +156,42 @@ class PurePositionalDataset(Dataset):
         num_pairs = num_nodes * (num_nodes - 1) // 2
         return total / num_pairs if num_pairs > 0 else 0.0
 
+    @staticmethod
+    def _compute_global_efficiency(edge_index_list, num_nodes):
+        """Mean of all n*(n-1)/2 unique pairwise inverse shortest-path distances (Global Efficiency)."""
+        adj = [[] for _ in range(num_nodes)]
+        seen = set()
+        for u, v in edge_index_list:
+            if (u, v) not in seen:
+                adj[u].append(v)
+                seen.add((u, v))
+
+        total = 0.0
+        for start in range(num_nodes):
+            dist = [-1] * num_nodes
+            dist[start] = 0
+            queue = [start]
+            idx = 0
+            while idx < len(queue):
+                node = queue[idx]; idx += 1
+                for nb in adj[node]:
+                    if dist[nb] == -1:
+                        dist[nb] = dist[node] + 1
+                        queue.append(nb)
+            for j in range(start + 1, num_nodes):
+                if dist[j] > 0:
+                    total += 1.0 / dist[j]
+
+        num_pairs = num_nodes * (num_nodes - 1) // 2
+        return total / num_pairs if num_pairs > 0 else 0.0
+
+    @staticmethod
+    def _compute_ge_sqrt_n(edge_index_list, num_nodes):
+        """GE * sqrt(n) -- approximately n-invariant for random trees."""
+        ge = PurePositionalDataset._compute_global_efficiency(edge_index_list, num_nodes)
+        return ge * math.sqrt(num_nodes)
+
+    # ------------------------------------------------------------------
     def __len__(self):
         return len(self.data_list)
 
@@ -153,8 +203,6 @@ class PurePositionalDataset(Dataset):
             return subset
 
         data = self.data_list[idx]
-
-        # Data output
         return {
             "x": data.x,
             "edge_index": data.edge_index,
@@ -168,6 +216,7 @@ class PurePositionalDataset(Dataset):
             "out_degree": data.out_degree,
             "edge_input": data.edge_input,
         }
+
 
 class PureSemanticDataset(Dataset):
     def __init__(
@@ -198,10 +247,7 @@ class PureSemanticDataset(Dataset):
         self.feature_vocab_size = feature_vocab_size
         self.topology = topology
         self.target_position = target_position
-
         rng = np.random.default_rng(seed)
-
-        # Added some caching logic
         if cache_path and os.path.exists(cache_path):
             cached = torch.load(cache_path, map_location='cpu')
             self.data_list = cached['data_list']
@@ -223,7 +269,6 @@ class PureSemanticDataset(Dataset):
             else:
                 n = self.num_nodes
 
-            # Kept just added ER noise topology
             if self.topology == "er":
                 edge_index = []
                 for i in range(n):
@@ -303,3 +348,12 @@ class PureSemanticDataset(Dataset):
             "out_degree": data.out_degree,
             "edge_input": data.edge_input
         }
+
+
+def get_pure_dataset(task: str, **kwargs):
+    if task == "positional":
+        return PurePositionalDataset(**kwargs)
+    elif task == "semantic":
+        return PureSemanticDataset(**kwargs)
+    else:
+        raise ValueError(f"Unknown task: {task}")

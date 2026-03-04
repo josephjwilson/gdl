@@ -73,11 +73,22 @@ class GraphormerGraphEncoder(nn.Module):
         q_noise: float = 0.0,
         qn_block_size: int = 8,
         fixed_spd_bias: bool = False,
+        alibi_spd_bias: bool = False,
+        alibi_custom_slopes=None,
         use_ffn: bool = True,
         causal_mask: bool = False,
         use_virtual_distance: bool = True,
         use_spd_bias: bool = True,
         no_cls: bool = False,
+        no_degree_embedding: bool = False,
+        use_ecc_cls_bias: bool = False,
+        ecc_cls_slope: float = 1.0,
+        use_farness_cls_bias: bool = False,
+        use_ecc_alibi_cls_bias: bool = False,
+        use_raw_ecc_alibi_cls_bias: bool = False,
+        raw_ecc_alibi_slope_rate: float = 8.0,
+        alibi_spd_slope_rate: float = 8.0,
+        use_random_cls_bias: bool = False,
     ) -> None:
 
         super().__init__()
@@ -99,6 +110,7 @@ class GraphormerGraphEncoder(nn.Module):
             hidden_dim=embedding_dim,
             n_layers=num_encoder_layers,
             no_cls=no_cls,
+            no_degree_embedding=no_degree_embedding,
         )
 
         self.graph_attn_bias = GraphAttnBias(
@@ -112,9 +124,19 @@ class GraphormerGraphEncoder(nn.Module):
             hidden_dim=embedding_dim,
             n_layers=num_encoder_layers,
             fixed_spd_bias=fixed_spd_bias,
+            alibi_spd_bias=alibi_spd_bias,
+            alibi_custom_slopes=alibi_custom_slopes,
             use_virtual_distance=use_virtual_distance,
             use_spd_bias=use_spd_bias,
             no_cls=no_cls,
+            use_ecc_cls_bias=use_ecc_cls_bias,
+            ecc_cls_slope=ecc_cls_slope,
+            use_farness_cls_bias=use_farness_cls_bias,
+            use_ecc_alibi_cls_bias=use_ecc_alibi_cls_bias,
+            use_raw_ecc_alibi_cls_bias=use_raw_ecc_alibi_cls_bias,
+            raw_ecc_alibi_slope_rate=raw_ecc_alibi_slope_rate,
+            alibi_spd_slope_rate=alibi_spd_slope_rate,
+            use_random_cls_bias=use_random_cls_bias,
         )
 
         self.embed_scale = embed_scale
