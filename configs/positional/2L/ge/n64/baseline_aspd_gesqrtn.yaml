@@ -1,0 +1,30 @@
+# Positional GE*sqrt(n) baseline + ALiBi SPD n=64 — full model, 2L/8H/256d
+# No eccentricity CLS bias — standard virtual distance only
+# SPD: ALiBi linear penalty (rate=8)
+# Token-equalized: 48x64=3072 tok/step, 1000x64=64k total tokens
+model:
+  encoder_layers: 2
+  encoder_embed_dim: 256
+  encoder_ffn_embed_dim: 256
+  encoder_attention_heads: 8
+  pre_layernorm: true
+  use_virtual_distance: true
+  use_spd_bias: true
+  alibi_spd_bias: true
+
+train:
+  task: positional
+  epochs: 200
+  lr: 5.0e-4
+  weight_decay: 0.01
+  samples: 1000
+  n_nodes: 64
+  batch_size: 48
+  use_bf16: true
+  readout: cls
+  loss_type: mse
+  num_classes: 1
+  target_metric: ge_sqrt_n
+  cache_dataset: datasets/positional_ge_sqrt_n/n64.pt
+  save_path: models/positional/2L/ge/n64/baseline_aspd_gesqrtn.pt
+  log_file: logs/positional/2L/ge/n64/baseline_aspd_gesqrtn.log

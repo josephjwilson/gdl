@@ -43,11 +43,22 @@ class ModelConfig:
 
     # Experiment-specific toggles
     fixed_spd_bias: bool = False
+    alibi_spd_bias: bool = False
+    alibi_custom_slopes: Optional[List[float]] = None
     use_ffn: bool = True
     causal_mask: bool = False
     use_virtual_distance: bool = True
     use_spd_bias: bool = True       # Set False to ablate spatial_pos_encoder contribution
     no_cls: bool = False            # Remove CLS/VNode from attention
+    no_degree_embedding: bool = False  # Skip degree encoders (isolate QK^T from structural info)
+    use_ecc_cls_bias: bool = False      # Replace constant CLS→node bias with eccentricity-based penalty
+    ecc_cls_slope: float = 1.0          # Slope m in CLS bias: t_h - m * ecc(j)
+    use_farness_cls_bias: bool = False  # ALiBi-style CLS→node bias using mean distance
+    use_ecc_alibi_cls_bias: bool = False  # Diameter-normalized ecc with per-head ALiBi slopes
+    use_raw_ecc_alibi_cls_bias: bool = False  # Unnormalized ecc with per-head ALiBi slopes
+    raw_ecc_alibi_slope_rate: float = 8.0  # Exponent in 2^(-rate/H); 8=standard, 2=shallow
+    alibi_spd_slope_rate: float = 8.0  # ALiBi SPD exponent: 2^(-rate/H); 8=standard
+    use_random_cls_bias: bool = False     # Control: random per-node CLS bias (same ALiBi schedule as raw_ecc)
 
     # Misc (required by encoder but rarely changed)
     share_encoder_input_output_embed: bool = False
@@ -130,15 +141,21 @@ class TrainConfig:
     gradient_clip: float = 0.0    # Max grad norm (0 = disabled)
     warmup_frac: float = 0.0      # Fraction of total steps for linear warmup
     log_file: str = ""             # Path to epoch-level log file (empty = disabled)
-    topology: str = "ring"          # Broadcast: "ring", "path", "barbell"
+    topology: str = "er"          # Topology: "er" (default), "ring", "path", "barbell"
     mark_source: bool = True        # Broadcast: random marked source (vs fixed node 0)
     online_regen: bool = False      # Regenerate dataset each epoch (S8)
     feature_vocab_size: int = 2     # Number of distinct c0 feature values (S8)
     loss_type: str = "cross_entropy"  # "cross_entropy" or "mse"
     classification_bins: Optional[int] = None  # S9b: discretize targets into bins^4 classes
+    num_classes: Optional[int] = None   # Override output head size (positional scaling)
     num_feature_cols: int = 1       # Number of random feature columns per node (S9)
     use_bf16: bool = False          # BF16 mixed precision training (S9)
     graph_families: Optional[List[str]] = None  # Subset of ['er','ba','ws','regular','tree']
+    target_position: str = "random"   # "random", "highest_degree", "lowest_degree"
+    target_metric: str = "apl"       # "apl", "global_efficiency", or "ge_sqrt_n" (positional task)
+    distance_bins: object = None  # Mixed task: [2,3,4] = stratified, "uncapped" = raw SPD, None = dataset default
+    num_colors: int = 2             # Retrieval task: number of color categories
+    dataset_name: str = ""           # TUDataset name (e.g., "PROTEINS", "NCI1")
 
 
 @dataclass
