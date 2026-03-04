@@ -5,19 +5,33 @@ __pycache__/
 *.egg
 build/
 dist/
+.env
+*.env
+
+# Cython build artifacts
+*.so
+*.c
+graphormer/data/algos.c
 
 # Models and results (large artifacts)
 /models/
 results/
 logs/
-data/cache/
 datasets/
+data/cache/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
 
 # Editor
 .vscode/
+.idea/
 *.swp
+*.swo
 
 # OS
 .DS_Store
+Thumbs.db
 
 fairseq/**/models/
